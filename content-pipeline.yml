@@ -1,0 +1,159 @@
+# .github/workflows/content-pipeline.yml
+name: MicroMoneyMachine Content Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      keywords:
+        description: 'Keywords (comma-separated)'
+        required: true
+        type: string
+      target_repo:
+        description: 'Target repository'
+        required: true
+        type: choice
+        options:
+          - SolarCaravanClub
+          - RemoteWorkErgonomics
+        default: SolarCaravanClub
+
+jobs:
+  keyword-analysis:
+    runs-on: ubuntu-latest
+    outputs:
+      viable-keywords: ${{ steps.analyze.outputs.viable-keywords }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios cheerio
+          
+      - name: Analyze Keywords
+        id: analyze
+        run: |
+          node scripts/keyword-analyzer.js "${{ github.event.inputs.keywords }}"
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+
+  content-generation:
+    needs: keyword-analysis
+    runs-on: ubuntu-latest
+    if: needs.keyword-analysis.outputs.viable-keywords != '[]'
+    outputs:
+      content-files: ${{ steps.generate.outputs.content-files }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios
+        
+      - name: Generate Content
+        id: generate
+        run: |
+          node scripts/content-generator.js '${{ needs.keyword-analysis.outputs.viable-keywords }}'
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          AMAZON_AFFILIATE_TAG: ${{ secrets.AMAZON_AFFILIATE_TAG }}
+          TARGET_REPO: ${{ github.event.inputs.target_repo }}
+          
+      - name: Upload Content Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-content
+          path: generated-content/
+          
+      - name: Commit to Target Repository
+        run: |
+          cd ${{ github.event.inputs.target_repo }}
+          git config user.name "MicroMoneyMachine Bot"
+          git config user.email "bot@micromoneymachine.com"
+          
+          # Copy generated content to target repo
+          cp -r ../generated-content/* ./content/
+          
+          git add .
+          git commit -m "🤖 Add new content via MicroMoneyMachine pipeline" || echo "No changes to commit"
+          git push origin main
+
+  slack-notification:
+    needs: [keyword-analysis, content-generation]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios
+          
+      - name: Download Content
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-content
+          path: generated-content/
+          
+      - name: Send Slack Notification
+        run: |
+          node scripts/slack-notifier.js
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+
+  deploy-to-wordpress:
+    needs: [content-generation, slack-notification]
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[APPROVED]') || github.event.inputs.auto_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios
+          
+      - name: Download Content
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-content
+          path: generated-content/
+          
+      - name: Deploy to WordPress
+        run: |
+          node scripts/wordpress-deployer.js
+        env:
+          WORDPRESS_API_URL: ${{ secrets.WORDPRESS_API_URL }}
+          WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
+          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          TARGET_REPO: ${{ github.event.inputs.target_repo }}
