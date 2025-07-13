@@ -1,0 +1,70 @@
+# .github/workflows/approval.yml
+name: Content Approval
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Approval action'
+        required: true
+        type: choice
+        options:
+          - approve
+          - reject
+        default: approve
+      run_id:
+        description: 'Original workflow run ID'
+        required: true
+        type: string
+
+jobs:
+  approve-content:
+    if: contains(github.event.comment.body, '/approve') || github.event.inputs.action == 'approve'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Create Approval Commit
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git commit --allow-empty -m "[APPROVED] Deploy content to WordPress - Run ID: ${{ github.event.inputs.run_id || github.run_id }}"
+          git push
+          
+      - name: Trigger WordPress Deployment
+        if: github.event.inputs.run_id
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.reRunWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: ${{ github.event.inputs.run_id }}
+            });
+
+  reject-content:
+    if: contains(github.event.comment.body, '/reject') || github.event.inputs.action == 'reject'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post Rejection Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const message = `❌ Content rejected for Run ID: ${{ github.event.inputs.run_id || github.run_id }}
+            
+            The generated content has been rejected and will not be deployed to WordPress.
+            
+            To regenerate content with different parameters, please run the workflow again.`;
+            
+            if (context.payload.issue) {
+              await github.rest.issues.createComment({
+                issue_number: context.payload.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: message
+              });
+            }
