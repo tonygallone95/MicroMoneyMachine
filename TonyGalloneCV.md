@@ -1,5 +1,3 @@
-# Enhanced with Claude.ai Opus 4.7
-
 # Tony Gallone 
 ## 🚀 Cloud Infrastructure & DevOps Specialist | 15+ Years IT Experience
 
